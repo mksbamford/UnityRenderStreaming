@@ -98,7 +98,7 @@ namespace Unity.RenderStreaming
         private readonly Dictionary<string, PeerConnection> _mapConnectionIdAndPeer =
             new Dictionary<string, PeerConnection>();
         private bool _runningResendCoroutine;
-        private float _resendInterval = 1.0f;
+        private float _resendInterval = 3.0f;
 
         static List<RenderStreamingInternal> s_list = new List<RenderStreamingInternal>();
 
@@ -313,9 +313,21 @@ namespace Unity.RenderStreaming
         ///
         /// </summary>
         /// <param name="connectionId"></param>
+        /// <param name="track"></param>
+        /// <returns></returns>
+        public IEnumerable<RTCRtpTransceiver> GetTransceivers(string connectionId)
+        {
+            return _mapConnectionIdAndPeer[connectionId].peer.GetTransceivers();
+        }
+
+        /// <summary>
+        ///
+        /// </summary>
+        /// <param name="connectionId"></param>
         public void SendOffer(string connectionId)
         {
-            var pc = _mapConnectionIdAndPeer[connectionId];
+            if (!_mapConnectionIdAndPeer.TryGetValue(connectionId, out var pc))
+                return;
             if (!IsStable(connectionId))
             {
                 if (!pc.waitingAnswer)
@@ -327,7 +339,6 @@ namespace Unity.RenderStreaming
                 _signaling.SendOffer(connectionId, pc.peer.LocalDescription);
                 return;
             }
-
             _startCoroutine(SendOfferCoroutine(connectionId, pc));
         }
 
@@ -346,10 +357,15 @@ namespace Unity.RenderStreaming
             {
                 foreach (var pair in _mapConnectionIdAndPeer.Where(x => x.Value.waitingAnswer))
                 {
-                    _signaling.SendOffer(pair.Key, pair.Value.peer.LocalDescription);
-                }
+                    float timeout = pair.Value.timeSinceStartWaitingAnswer + _resendInterval;
 
-                yield return new WaitForSeconds(_resendInterval);
+                    if (timeout < Time.realtimeSinceStartup)
+                    {
+                        _signaling.SendOffer(pair.Key, pair.Value.peer.LocalDescription);
+                        pair.Value.RestartTimerForWaitingAnswer();
+                    }
+                }
+                yield return 0;
             }
         }
 
@@ -392,8 +408,7 @@ namespace Unity.RenderStreaming
             {
                 _signaling.SendCandidate(connectionId, candidate);
             };
-            pc.OnIceConnectionChange = state => OnIceConnectionChange(connectionId, state);
-
+            pc.OnConnectionStateChange = state => OnConnectionStateChange(connectionId, state);
             pc.OnTrack = trackEvent =>
             {
                 onAddReceiver?.Invoke(connectionId, trackEvent.Receiver);
@@ -418,14 +433,14 @@ namespace Unity.RenderStreaming
             onAddChannel?.Invoke(connectionId, channel);
         }
 
-        void OnIceConnectionChange(string connectionId, RTCIceConnectionState state)
+        void OnConnectionStateChange(string connectionId, RTCPeerConnectionState state)
         {
             switch (state)
             {
-                case RTCIceConnectionState.Connected:
+                case RTCPeerConnectionState.Connected:
                     onConnect?.Invoke(connectionId);
                     break;
-                case RTCIceConnectionState.Disconnected:
+                case RTCPeerConnectionState.Disconnected:
                     onDisconnect?.Invoke(connectionId);
                     break;
             }
@@ -441,6 +456,9 @@ namespace Unity.RenderStreaming
         {
             // waiting other setLocalDescription process
             yield return new WaitWhile(() => !IsStable(connectionId));
+
+            if (!ExistConnection(connectionId))
+                yield break;
 
             Assert.AreEqual(pc.peer.SignalingState, RTCSignalingState.Stable,
                 $"{pc} negotiationneeded always fires in stable state");
