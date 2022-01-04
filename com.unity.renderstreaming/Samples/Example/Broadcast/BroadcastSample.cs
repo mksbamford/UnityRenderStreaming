@@ -1,11 +1,7 @@
 using UnityEngine;
-using UnityEngine.InputSystem.Layouts;
-using UnityEngine.InputSystem.XR;
 
 namespace Unity.RenderStreaming.Samples
 {
-    using InputSystem = UnityEngine.InputSystem.InputSystem;
-
     class BroadcastSample : MonoBehaviour
     {
         [SerializeField] RenderStreaming renderStreaming;
